@@ -303,3 +303,106 @@ function(azsphere_configure_tools)
 endfunction()
 
 
+# Helper function called by functions which require SDK 20.04 or later.
+# If the wrong SDK has been selected, print a fatal error message.
+function(_azsphere_assert_sdk_2004_or_later func_name)
+    if (NOT ("${AS_INT_SELECTED_TOOLS}" IN_LIST sdks_2004_or_later))
+        message(
+            FATAL_ERROR
+            "${func_name} is only supported for tools revision 20.04 or later. "
+            "See https://aka.ms/AzureSphereToolsRevisions.")
+    endif()
+endfunction()
+
+function (azsphere_configure_api)
+    # This function can be called if the caller has opted into SDK 20.04 or later
+    _azsphere_assert_sdk_2004_or_later("azsphere_configure_api")
+
+    set(options)
+    set(oneValueArgs TARGET_API_SET)
+    set(multiValueArgs)
+    cmake_parse_arguments(ACA "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    # Ensure all required arguments, and no unexpected arguments, were supplied.
+    if(NOT (DEFINED ACA_TARGET_API_SET))
+        message(FATAL_ERROR "azsphere_configure_api missing TARGET_API_SET argument")
+    elseif(DEFINED ACA_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "azsphere_configure_api received unexpected argument(s) ${ACA_UNPARSED_ARGUMENTS}")
+    endif()
+
+    if ("${AS_INT_APP_TYPE}" STREQUAL "RTApp")
+        message(
+            WARNING
+            "Real-time capable applications do not require a target API set. "
+            "The call to azsphere_configure_api will be ignored.")
+        return()
+    endif()
+    
+    if(NOT ("${AS_INT_RESOLVED_API_SET}" STREQUAL "${ACA_TARGET_API_SET}"))
+        # Target API set which was supplied to azsphere_configure_api.
+        if ("${ACA_TARGET_API_SET}" STREQUAL "${AS_INT_ACTUAL_LATEST_LTS}")
+            set(cml_latest_text "the latest ")
+        elseif ("${ACA_TARGET_API_SET}" STREQUAL "${AS_INT_ACTUAL_LATEST_BETA}")
+            set(cml_latest_text "the latest Beta ")
+        endif()
+
+        # Resolved target API set which was supplied on command line.
+        if ("${AS_INT_RESOLVED_API_SET}" STREQUAL "${AS_INT_ACTUAL_LATEST_LTS}")
+            set(cli_latest_text "the latest ")
+        elseif ("${AS_INT_RESOLVED_API_SET}" STREQUAL "${AS_INT_ACTUAL_LATEST_BETA}")
+            set(cli_latest_text "the latest Beta ")
+        endif()
+
+        # Values of AZURE_SPHERE_TARGET_API_SET which would result in ACA_TARGET_API_SET.
+        # Use "latest" if "latest-lts" or "latest-beta", or if specific, latest version.
+        if ("${ACA_TARGET_API_SET}" STREQUAL "${AS_INT_ACTUAL_LATEST_LTS}")
+            set(param_sets "\"latest-lts\" or \"${AS_INT_ACTUAL_LATEST_LTS}\"")
+        elseif ("${ACA_TARGET_API_SET}" STREQUAL "${AS_INT_ACTUAL_LATEST_BETA}")
+            set(param_sets "\"latest-beta\" or \"${AS_INT_ACTUAL_LATEST_BETA}\"")
+        else()
+            set(param_sets "\"${ACA_TARGET_API_SET}\"")
+        endif()
+
+        message(FATAL_ERROR
+            "This app targets ${cml_latest_text}API set '${ACA_TARGET_API_SET}', but this build targets "
+            "${cli_latest_text}API set '${AS_INT_RESOLVED_API_SET}'.\n"
+            "To configure the app to target API set '${AS_INT_RESOLVED_API_SET}', update CMakeLists.txt with "
+            "azsphere_configure_api(TARGET_API_SET \"${AS_INT_RESOLVED_API_SET}\").\n"
+            "To configure the build to target API set '${ACA_TARGET_API_SET}', set the AZURE_SPHERE_TARGET_API_SET "
+            "parameter to ${param_sets} in CMakeSettings.json (if using Visual Studio), "
+            ".vscode/settings.json (if using Visual Studio Code), or via "
+            "-DAZURE_SPHERE_TARGET_API_SET=${param_sets} (if using command-line build).\n"
+            "Please see https://aka.ms/AzureSphereAPISets")
+    endif()
+
+    set(AS_INT_CONFIGURED_API_SET "ON" CACHE INTERNAL "User called azsphere_configure_api.")
+endfunction()
+
+function(azsphere_target_hardware_definition target)
+    # This function can be called if the caller has opted into SDK 20.04 or later, otherwise
+    # the hardware definition is supplied via the AZURE_SPHERE_TARGET_HARDWARE_DEFINITION_DIRECTORY
+    # and AZURE_SPHERE_TARGET_HARDWARE_DEFINTION command-line arguements.
+
+    _azsphere_assert_sdk_2004_or_later("azsphere_target_hardware_definition")
+    
+    set(options)
+    set (oneValueArgs TARGET_DEFINITION)
+    set(multiValueArgs TARGET_DIRECTORY)
+    cmake_parse_arguments(PARSE_ARGV 1 ATHD "${options}" "${oneValueArgs}" "${multiValueArgs}")
+
+     # Ensure all required arguments, and no unexpected arguments, were supplied.
+     if(NOT (DEFINED ATHD_TARGET_DIRECTORY))
+        # Check if the Target definition is in the SDK path
+        set(sdk_hardware_json_path "${AZURE_SPHERE_SDK_PATH}/HardwareDefinitions/")
+        if((DEFINED ATHD_TARGET_DEFINITION) AND (NOT (EXISTS "${sdk_hardware_json_path}/${ATHD_TARGET_DEFINITION}")))
+            message(FATAL_ERROR "Couldn't find \'${ATHD_TARGET_DEFINITION}\' in the SDK. Provide a TARGET_DIRECTORY or use an existing board from the SDK.")
+        endif()
+    # TARGET_DEFINITION should always be provided when using hardware definitions
+    elseif(NOT (DEFINED ATHD_TARGET_DEFINITION))
+        message(FATAL_ERROR "azsphere_target_hardware_definition missing TARGET_DEFINITION argument")
+    elseif(DEFINED ATHD_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "azsphere_target_hardware_definition received unexpected argument(s) ${ATHD_UNPARSED_ARGUMENTS}")
+    endif()
+
+
+endfunction()
