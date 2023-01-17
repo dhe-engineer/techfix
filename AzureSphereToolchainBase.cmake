@@ -19,6 +19,7 @@ set(libmalloc_10_or_later "10" "11" "12" "13" "14" "15")
 
 # Set Azure sphere approot directory
 set(AZURE_SPHERE_APPROOT_DIR "${CMAKE_BINARY_DIR}/approot${PROJECT_NAME}")
+include("${AZURE_SPHERE_CMAKE_PATH}/AzureSphereInternal.cmake")
 
 # Get available and installed API sets
 file(GLOB AZURE_SPHERE_AVAILABLE_API_SETS RELATIVE "${AZURE_SPHERE_SDK_PATH}/Sysroots" "${AZURE_SPHERE_SDK_PATH}/Sysroots/*")
@@ -404,5 +405,113 @@ function(azsphere_target_hardware_definition target)
         message(FATAL_ERROR "azsphere_target_hardware_definition received unexpected argument(s) ${ATHD_UNPARSED_ARGUMENTS}")
     endif()
 
+    set (defn_file "${ATHD_TARGET_DEFINITION}")
+    set (VAR_TARGET_DEF_FOUND FALSE)
+    # Check that the user added paths exists
+    if (DEFINED ATHD_TARGET_DIRECTORY)
+        foreach(user_path ${ATHD_TARGET_DIRECTORY})
+            set (defn_user_include_path "")
+            if (IS_ABSOLUTE "${user_path}")
+                set(defn_user_include_path "${user_path}")
+            else()
+                get_filename_component(defn_user_include_path ${user_path} ABSOLUTE BASE_DIR ${CMAKE_SOURCE_DIR})
+                set(defn_user_include_path "${defn_user_include_path}")
+            endif()             
+            if (NOT (EXISTS "${defn_user_include_path}"))
+                message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DIRECTORY ${defn_user_include_path} does not exist.")
+            endif()
+            if (NOT (IS_DIRECTORY "${defn_user_include_path}"))
+                message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DIRECTORY ${defn_user_include_path} is not a directory.")
+            endif()
+            if (NOT VAR_TARGET_DEF_FOUND)
+                set(defn_file "${defn_user_include_path}/${ATHD_TARGET_DEFINITION}")
+                if ((EXISTS "${defn_file}") AND (NOT(IS_DIRECTORY "${defn_file}")))
+                    set(VAR_TARGET_DEF_FOUND TRUE)
+                endif()
+            endif()
+            if(NOT (EXISTS "${defn_user_include_path}/inc"))
+                message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DIRECTORY ${defn_user_include_path} doesn't include an 'inc' directory. Make sure that you have generated the hardware definitions.")
+            endif()
+
+            target_link_directories(${target} SYSTEM PUBLIC "${defn_user_include_path}/inc")
+
+            if(NOT (EXISTS "${defn_user_include_path}/inc/hw"))
+                message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DIRECTORY ${defn_user_include_path}/inc/ doesn't include a 'hw' directory. Make sure that you have generated the hardware definitions.")
+            endif()
+            list(APPEND APPLICATION_INCLUDE_PATHS_LIST "${defn_user_include_path}")
+        endforeach()
+    endif()
+
+    # By default we add the SDK path as last in our list
+    list(APPEND APPLICATION_INCLUDE_PATHS_LIST "${AZURE_SPHERE_SDK_PATH}/HardwareDefinitions/")
+    target_include_directories(${target} SYSTEM PUBLIC "${AZURE_SPHERE_SDK_PATH}/HardwareDefinitions/inc")
+    target_include_directories(${target} SYSTEM PUBLIC "${AZURE_SPHERE_SDK_PATH}/HardwareDefinitions/inc/hw")
+
+    if (NOT VAR_TARGET_DEF_FOUND)
+        set(defn_file "${AZURE_SPHERE_SDK_PATH}/HardwareDefinitions/${ATHD_TARGET_DEFINITION}")
+    endif()
+    
+    # Ensure the hardware definition file exists and really is a file.
+    # CMake doesn't have an IS_FILE operator, so approximate by failing if it is a directory.
+    if (NOT (EXISTS "${defn_file}"))
+        message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DEFINITION file ${defn_file} does not exist.")
+    endif()
+    if (IS_DIRECTORY "${defn_file}")
+        message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DEFINITION file ${defn_file} is a directory.")
+    endif()
+    string(REGEX MATCH "\.[jJ][sS][oO][nN]$" is_json "${defn_file}")
+    if ("${is_json}" STREQUAL "")
+        message(FATAL_ERROR "azsphere_target_hardware_definition: TARGET_DEFINITION file ${defn_file} is not a json file.")
+    endif()
+    string (REPLACE ";" "," APPLICATION_INCLUDE_PATHS_STR "${APPLICATION_INCLUDE_PATHS_LIST}")
+    get_filename_component(root_filename ${defn_file} NAME)
+    # Supply JSON file to azsphere image-package pack-application.
+    # This property is used in _azsphere_target_add_image_package_common.
+    set_target_properties(${target} PROPERTIES AS_PKG_HWD_ARGS "--hardware-definitions;${APPLICATION_INCLUDE_PATHS_STR};--target-definition-filename;${root_filename}")
+endfunction()
+
+function (azpshere_target_add_image_package target)
+    _azsphere_assert_sdk_2004_or_later("azpshere_target_add_image_package")
+
+    set (options)
+    set (oneValueArgs APP_MANIFEST DEBUG_LIB)
+    set (multiValueArgs RESOURCE_FILES)
+    cmake_parse_arguments(PARSE_ARGV 1 ATAIP "${options}" "${oneValueArgs}" "${multiValueArgs}")
+
+    # Ensure all required arguments, and no unexpected arguments, were specified.
+    # APP_MANIFEST and RESOURCE_FILES are optional
+    if (DEFINED ATAIP_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "azsphere_target_add_image_package recieved unexpted argument(s) ${ATAIP_UNPARSED_ARGUMENTS}")
+    endif()
+
+    if (DEFINED ATAIP_APP_MANIFEST)
+        if (IS_ABSOLUTE "${AIATP_APP_MANIFEST}")
+            set(app_manifest_fn "${ATAIP_APP_MANIFEST}")
+        else()
+            get_filename_component(app_manifest_fn ${ATAIP_APP_MANIFEST} ABSOLUTE BASE_DIR ${CMAKE_SOURCE_DIR})
+        endif()
+    else()
+        set (app_manifest_fn "${CMAKE_SOURCE_DIR}/app_manifest.json")
+    endif()
+
+    # Only libmalloc is allowed as a debug library
+    if ((DEFINED ATAIP_DEBUG_LIB) AND (NOT ("${ATAIP_DEBUG_LIB}" STREQUAL "libmalloc")))
+        message(FATAL_ERROR "The resource library should be libmalloc")
+    endif()
+
+    if (DEFINED ATAIP_DEBUG_LIB)
+        if ("${AS_INT_RESOLVED_API_SET}" IN_LIST libmalloc_10_or_later) # Sysroots 8 and 9 don't contain libmalloc       
+            set(ATAIP_LIB_MALLOC_PATH "${AZURE_SPHERE_SDK_PATH}/Sysroots/${AS_INT_RESOLVED_API_SET}/usr/lib/libmalloc.so.0")
+        else()
+            message(FATAL_ERROR "azsphere_target_add_image_package received an unexpected request to set DEBUG_LIB: libmalloc which is not available in the selected Target API Set. Please select version 10 or later in the CMakeLists.txt")
+        endif()
+    endif()
+
+    _azsphere_target_add_image_package_common(
+        ${target}
+        APP_MANIFEST "${app_manifest_fn}"
+        DEBUG_LIB ${ATAIP_LIB_MALLOC_PATH}
+        RESOURCE_FILES ${ATAIP_RESOURCE_FILES}
+    )
 
 endfunction()
